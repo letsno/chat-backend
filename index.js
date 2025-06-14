@@ -1,37 +1,62 @@
 const express = require('express');
 const http = require('http');
-const WebSocket = require('ws');
-const cors = require('cors');
+const { Server } = require('socket.io');
+const db = require('./db'); // <<== new
 
 const app = express();
-app.use(cors());
-
 const server = http.createServer(app);
-const wss = new WebSocket.Server({ server });
+const io = new Server(server, {
+  cors: {
+    origin: "*"
+  }
+});
 
-const clients = new Set();
+io.on('connection', (socket) => {
+  console.log('🔌 A user connected');
 
-wss.on('connection', function connection(ws) {
-  clients.add(ws);
+  socket.on('join', ({ userId, userName }) => {
+    socket.data.userId = userId;
+    socket.data.userName = userName;
+    console.log(`✅ ${userName} joined`);
+  });
 
-  ws.on('message', function incoming(message) {
-    for (const client of clients) {
-      if (client !== ws && client.readyState === WebSocket.OPEN) {
-        client.send(message);
+  socket.on('chat_message', (msg) => {
+    const userId = socket.data.userId;
+    const userName = socket.data.userName;
+
+    // Save to MySQL
+    const sql = 'INSERT INTO messages (user_id, user_name, message) VALUES (?, ?, ?)';
+    db.query(sql, [userId, userName, msg], (err) => {
+      if (err) {
+        console.error('❌ Error saving message:', err);
+      } else {
+        console.log('💾 Message saved to DB');
       }
+    });
+
+    // Broadcast to all
+    io.emit('chat_message', {
+      userId,
+      userName,
+      message: msg,
+      timestamp: new Date()
+    });
+  });
+});
+
+app.get('/messages', (req, res) => {
+  const sql = 'SELECT * FROM messages ORDER BY timestamp ASC';
+  db.query(sql, (err, results) => {
+    if (err) {
+      console.error('❌ Failed to fetch messages:', err);
+      return res.status(500).json({ error: 'Database error' });
     }
-  });
 
-  ws.on('close', () => {
-    clients.delete(ws);
+    res.json(results);
   });
 });
 
-app.get('/', (req, res) => {
-  res.send('🟢 WebSocket Chat Server is running!');
-});
 
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-  console.log(`✅ Server is listening on port ${PORT}`);
+server.listen(3000, () => {
+  console.log('✅ Server is listening on port 3000');
 });
